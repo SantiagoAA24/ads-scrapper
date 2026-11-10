@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ads-scrapper"
+version = "0.1.0"
+description = "Scraper local de la Meta Ads Library para detectar anuncios en tendencia"
+requires-python = ">=3.10"
+dependencies = ["playwright>=1.45"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+ads-scrapper = "ads_scrapper.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

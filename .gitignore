@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+# Datos locales: base de datos y perfil del navegador
+data/
