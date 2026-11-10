@@ -65,8 +65,18 @@ def test_unrelated_or_broken_bodies_yield_nothing():
 
 
 def test_content_hash_ignores_case_and_spacing():
-    a = parser.content_hash("Compra  YA\n\nenvío gratis", "tienda.com")
-    b = parser.content_hash("compra ya envío gratis ", "tienda.com")
+    a = parser.content_hash("Compra  YA\n\nenvío gratis")
+    b = parser.content_hash("compra ya envío gratis ")
     assert a == b
-    assert a != parser.content_hash("compra ya envío gratis", "otra.com")
-    assert parser.content_hash(None, "tienda.com") is None
+    assert a != parser.content_hash("compra ya envío gratis hoy")
+    assert parser.content_hash(None) is None
+
+
+def test_group_without_meta_id_still_counts_as_one(payload):
+    connection = payload["data"]["ad_library_main"]["search_results_connection"]
+    group = next(e for e in connection["edges"] if len(e["node"]["collated_results"]) == 3)
+    for result in group["node"]["collated_results"]:
+        result["collation_id"] = None
+    connection["edges"] = [group]
+    ads = parser.parse_payload(payload).ads
+    assert len({ad["collation_id"] for ad in ads}) == 1 and ads[0]["collation_id"]

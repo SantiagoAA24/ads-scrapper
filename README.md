@@ -25,7 +25,18 @@ Buscar una palabra clave (abre una ventana de Chromium y hace scroll solo):
 ads-scrapper scrape "faja reductora" --country CO --max-ads 300
 ```
 
-Ver los anuncios guardados con más duplicados, con enlace directo a cada uno:
+Abrir el buscador local (solo accesible desde tu computador):
+
+```bash
+ads-scrapper web
+```
+
+Agrupa los anuncios que comparten el mismo texto y los ordena por copias activas.
+Permite buscar por texto, anunciante o dominio (sin importar tildes) y filtrar por
+búsqueda de origen, formato, fecha de inicio, mínimo de duplicados y estado. Cada
+tarjeta enlaza al anuncio en la Ad Library y a su página de destino.
+
+Lo mismo, resumido en la terminal:
 
 ```bash
 ads-scrapper top
@@ -55,8 +66,12 @@ Se guardan en `data/` (ignorado por git):
 - `data/browser-profile/`: perfil del navegador, para no parecer una sesión nueva
   en cada ejecución.
 
-`content_hash` agrupa anuncios con el mismo texto y dominio de destino aunque
-vengan de páginas distintas.
+`content_hash` agrupa anuncios con el mismo texto aunque usen creativos, páginas
+o tiendas distintas. Meta solo agrupa los que además comparten creativo, así que
+el total de copias de un grupo suma los conteos de Meta de cada creativo.
+
+Las vistas previas usan las URLs de Meta, que caducan a los pocos días; al
+repetir la búsqueda se renuevan.
 
 ## Cuidado con Meta
 

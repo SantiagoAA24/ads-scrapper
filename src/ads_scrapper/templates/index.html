@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="top">
+  <h1><a href="/">Anuncios en tendencia</a></h1>
+  <form class="filters" method="get" action="/">
+    <input type="search" name="q" value="{{ filters.q }}" placeholder="Buscar en texto, anunciante o dominio" autofocus>
+    <select name="search" aria-label="Búsqueda de origen">
+      <option value="">Todas las búsquedas</option>
+      {% for key, label in searches.items() %}
+      <option value="{{ key }}" {{ 'selected' if key == filters.search }}>{{ label }}</option>
+      {% endfor %}
+    </select>
+    <select name="format" aria-label="Formato">
+      <option value="">Todos los formatos</option>
+      {% for value in formats %}
+      <option value="{{ value }}" {{ 'selected' if value == filters.format }}>{{ format_labels.get(value, value) }}</option>
+      {% endfor %}
+    </select>
+    <select name="age" aria-label="Fecha de inicio">
+      <option value="">Cualquier fecha</option>
+      {% for days, label in age_choices %}
+      <option value="{{ days }}" {{ 'selected' if days|string == filters.age }}>{{ label }}</option>
+      {% endfor %}
+    </select>
+    <input type="number" name="min_copies" min="1" value="{{ filters.min_copies }}" placeholder="Mín. ×" aria-label="Mínimo de duplicados">
+    <label class="check"><input type="checkbox" name="active" value="1" {{ 'checked' if filters.active == '1' }}> Solo activos</label>
+    <select name="sort" aria-label="Orden">
+      {% for value, label in sort_choices %}
+      <option value="{{ value }}" {{ 'selected' if value == filters.sort }}>{{ label }}</option>
+      {% endfor %}
+    </select>
+    <button type="submit">Buscar</button>
+  </form>
+</header>
+<main>
+  {% if groups %}
+    <p class="summary">
+      {{ total_ads }} anuncios guardados. Cada tarjeta agrupa los que comparten el mismo texto;
+      × es el total de copias activas según Meta.
+    </p>
+    <div class="grid">
+      {% for ad in groups %}
+        {% set copies = ad.copies %}
+        {% set full_copy = false %}
+        {% set group_link = "/group/" ~ (ad.group_key | urlencode) if ad.stored > 1 else none %}
+        {% set parts = [] %}
+        {% if ad.creatives > 1 %}{% set _ = parts.append(ad.creatives ~ " creativos") %}{% endif %}
+        {% if ad.pages > 1 %}{% set _ = parts.append(ad.pages ~ " páginas") %}{% endif %}
+        {% if ad.first_start != ad.last_start %}{% set _ = parts.append("primera versión " ~ (ad.first_start | day)) %}{% endif %}
+        {% set detail = parts | join(" · ") %}
+        {% include "_card.html" %}
+      {% endfor %}
+    </div>
+    <nav class="pager">
+      {% if prev_link %}<a href="{{ prev_link }}">← Anteriores</a>{% endif %}
+      {% if prev_link or next_link %}<span class="meta">Página {{ page }}</span>{% endif %}
+      {% if next_link %}<a href="{{ next_link }}">Siguientes →</a>{% endif %}
+    </nav>
+  {% elif total_ads == 0 %}
+    <div class="empty">
+      <p>Todavía no hay anuncios guardados.</p>
+      <p>Ejecuta una búsqueda en la terminal: <code>ads-scrapper scrape "faja reductora" --country CO</code></p>
+    </div>
+  {% else %}
+    <div class="empty">
+      <p>Ningún anuncio coincide con estos filtros.</p>
+      {% if has_filters %}<p><a href="/">Quitar filtros</a></p>{% endif %}
+    </div>
+  {% endif %}
+</main>
+<script>
+// Los filtros aplican al cambiarlos; el texto, al pulsar Enter.
+document.querySelectorAll('form.filters select, form.filters input[type=checkbox]')
+  .forEach(el => el.addEventListener('change', () => el.form.submit()));
+</script>
+{% endblock %}

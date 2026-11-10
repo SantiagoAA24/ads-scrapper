@@ -90,8 +90,13 @@ def parse_payload(payload: Any) -> Batch:
             # Only the first ad of a group carries the count; share it.
             counts = [r["collation_count"] for r in group if r.get("collation_count")]
             group_count = max(counts) if counts else None
+            # Without Meta's id the members would look like separate groups
+            # and their shared count would be added once per member.
+            group_id = next((r["collation_id"] for r in group if r.get("collation_id")), None)
+            if group_id is None and len(group) > 1:
+                group_id = f"local-{group[0].get('ad_archive_id')}"
             for result in group:
-                ad = normalize_ad(result, group_count)
+                ad = normalize_ad(result, group_count, group_id)
                 if ad:
                     batch.ads.append(ad)
     return batch
@@ -104,7 +109,9 @@ def merge(target: Batch, other: Batch) -> None:
         target.has_next_page = other.has_next_page
 
 
-def normalize_ad(result: dict[str, Any], group_count: int | None = None) -> dict[str, Any] | None:
+def normalize_ad(
+    result: dict[str, Any], group_count: int | None = None, group_id: str | None = None
+) -> dict[str, Any] | None:
     ad_id = result.get("ad_archive_id")
     if not ad_id:
         return None
@@ -136,7 +143,7 @@ def normalize_ad(result: dict[str, Any], group_count: int | None = None) -> dict
     link_domain = _domain(link_url)
     return {
         "ad_archive_id": str(ad_id),
-        "collation_id": result.get("collation_id"),
+        "collation_id": result.get("collation_id") or group_id,
         "collation_count": result.get("collation_count") or group_count,
         "page_id": result.get("page_id") or snapshot.get("page_id"),
         "page_name": result.get("page_name") or snapshot.get("page_name"),
@@ -160,18 +167,20 @@ def normalize_ad(result: dict[str, Any], group_count: int | None = None) -> dict
         "image_urls": image_urls,
         "video_urls": video_urls,
         "preview_image_url": preview_urls[0] if preview_urls else None,
-        "content_hash": content_hash(body, link_domain),
+        "content_hash": content_hash(body),
         "raw": result,
     }
 
 
-def content_hash(body: str | None, link_domain: str | None) -> str | None:
-    """Fingerprint of copy + destination, to spot the same ad across pages."""
+def content_hash(body: str | None) -> str | None:
+    """Fingerprint of the ad copy, to spot the same ad across creatives, pages
+    and stores. The destination is left out on purpose: the same copy pointing
+    at different shops is the same ad being reused."""
     if not body:
         return None
     text = unicodedata.normalize("NFKC", body).casefold()
     text = _WHITESPACE.sub(" ", text).strip()
-    return hashlib.sha1(f"{text}|{link_domain or ''}".encode()).hexdigest()
+    return hashlib.sha1(text.encode()).hexdigest()
 
 
 def ad_url(ad_archive_id: str) -> str:

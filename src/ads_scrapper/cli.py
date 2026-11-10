@@ -1,4 +1,4 @@
-"""Command line: scrape a keyword, import a saved response, list top ads."""
+"""Command line: scrape a keyword, import a saved response, list or browse top ads."""
 
 from __future__ import annotations
 
@@ -53,6 +53,11 @@ def _build_parser() -> argparse.ArgumentParser:
     top_cmd.add_argument("text", nargs="?", help="filtrar por texto, anunciante o dominio")
     top_cmd.add_argument("--limit", type=int, default=20)
     top_cmd.set_defaults(handler=_cmd_top)
+
+    web_cmd = commands.add_parser("web", help="abrir el buscador local en el navegador")
+    web_cmd.add_argument("--port", type=int, default=8000)
+    web_cmd.add_argument("--no-browser", action="store_true", help="no abrir el navegador")
+    web_cmd.set_defaults(handler=_cmd_web)
     return root
 
 
@@ -107,7 +112,7 @@ def _cmd_import(conn, args) -> int:
 
 
 def _cmd_top(conn, args) -> int:
-    rows = db.top_ads(conn, args.text, args.limit)
+    rows = db.search_groups(conn, args.text, limit=args.limit)
     if not rows:
         print("No hay anuncios guardados que coincidan.")
         return 0
@@ -118,9 +123,27 @@ def _cmd_top(conn, args) -> int:
             else "?"
         )
         text = " ".join((row["body_text"] or row["title"] or "").split())
-        print(f"x{row['copies']:<4} {started}  {row['page_name'] or '?'}  [{row['link_domain'] or '-'}]")
+        extra = f"  ({row['creatives']} creativos)" if row["creatives"] > 1 else ""
+        print(f"x{row['copies']:<4} {started}  {row['page_name'] or '?'}  [{row['link_domain'] or '-'}]{extra}")
         print(f"      {text[:110]}")
         print(f"      {parser.ad_url(row['ad_archive_id'])}")
+    return 0
+
+
+def _cmd_web(conn, args) -> int:
+    import threading
+    import webbrowser
+
+    import uvicorn
+
+    from .web import create_app
+
+    url = f"http://127.0.0.1:{args.port}"
+    print(f"Buscador en {url} (Ctrl+C para cerrar)")
+    if not args.no_browser:
+        threading.Timer(1.0, webbrowser.open, [url]).start()
+    # Only this machine can reach it: bound to localhost.
+    uvicorn.run(create_app(args.db), host="127.0.0.1", port=args.port, log_level="warning")
     return 0
 
 

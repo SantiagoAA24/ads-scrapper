@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}{{ ads[0].page_name or "Grupo" }} · {{ ads | length }} anuncios{% endblock %}
+{% block content %}
+<header class="top">
+  <h1><a href="/">← Anuncios en tendencia</a></h1>
+  <div class="meta">
+    {{ ads | length }} anuncios guardados con el mismo texto
+    {%- if pages %} · {{ pages | join(", ") }}{% endif %}
+  </div>
+</header>
+<main>
+  <div class="grid">
+    {% for ad in ads %}
+      {% set copies = ad.collation_count or 1 %}
+      {% set full_copy = loop.first %}
+      {% set group_link = none %}
+      {% set detail = "ID " ~ ad.ad_archive_id %}
+      {% include "_card.html" %}
+    {% endfor %}
+  </div>
+</main>
+{% endblock %}

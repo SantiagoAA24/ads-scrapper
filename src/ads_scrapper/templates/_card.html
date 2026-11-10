@@ -1,0 +1,29 @@
+{# One ad. `copies` is the group total on the index, Meta's own count on the group page. #}
+<article class="card">
+  <div class="media">
+    <span class="badge {{ 'hot' if copies > 1 }}">×{{ copies }}</span>
+    {% if ad.display_format %}<span class="format">{{ format_labels.get(ad.display_format, ad.display_format) }}</span>{% endif %}
+    {% if ad.preview_image_url %}
+      Vista previa caducada
+      <img src="{{ ad.preview_image_url }}" alt="" loading="lazy" onerror="this.remove()">
+    {% else %}
+      Sin vista previa
+    {% endif %}
+  </div>
+  <div class="body">
+    <div class="page">{{ ad.page_name or "Anunciante desconocido" }}</div>
+    <div class="meta">
+      Desde {{ ad.start_date | day }} · {{ ad.start_date | days_ago }}
+      {%- if ad.is_active == 0 %} · inactivo{% endif %}
+      {%- if ad.link_domain %} · {{ ad.link_domain }}{% endif %}
+    </div>
+    {% if ad.title %}<div class="headline">{{ ad.title }}</div>{% endif %}
+    {% if ad.body_text %}<p class="copy {{ 'full' if full_copy }}">{{ ad.body_text }}</p>{% endif %}
+    {% if detail %}<div class="meta">{{ detail }}</div>{% endif %}
+    <div class="actions">
+      <a class="primary" href="{{ ad_url(ad.ad_archive_id) }}" target="_blank" rel="noopener">Ver en Ad Library</a>
+      {% if group_link %}<a href="{{ group_link }}">Ver los {{ ad.stored }} guardados</a>{% endif %}
+      {% if ad.link_url %}<a href="{{ ad.link_url }}" target="_blank" rel="noopener noreferrer">Destino</a>{% endif %}
+    </div>
+  </div>
+</article>
