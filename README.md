@@ -31,10 +31,31 @@ Abrir el buscador local (solo accesible desde tu computador):
 ads-scrapper web
 ```
 
-Agrupa los anuncios que comparten el mismo texto y los ordena por copias activas.
+**Anuncios.** Agrupa los que comparten el mismo texto y los ordena por tendencia.
 Permite buscar por texto, anunciante o dominio (sin importar tildes) y filtrar por
 búsqueda de origen, formato, fecha de inicio, mínimo de duplicados y estado. Cada
 tarjeta enlaza al anuncio en la Ad Library y a su página de destino.
+
+**Búsquedas guardadas.** Crea búsquedas, lánzalas con un clic y prográmalas (cada
+12 horas, cada día, cada 3 días o cada semana). Se ejecutan de una en una, con
+una pausa de 1 a 3 minutos entre ellas, y solo mientras `ads-scrapper web` siga
+abierto. Las búsquedas hechas con `scrape` en la terminal también aparecen aquí.
+
+Para repetir las programadas sin abrir el buscador (por ejemplo desde cron):
+
+```bash
+ads-scrapper refresh
+```
+
+### Cómo se mide la tendencia
+
+- **×N**: copias activas del grupo, sumando el conteo de Meta de cada creativo.
+- **+N** (verde): copias ganadas en los últimos 7 días. Se compara con el conteo
+  observado hace una semana; un creativo que empezó dentro de esa semana cuenta
+  entero como nuevo. Por eso hace falta repetir las búsquedas con regularidad.
+- El orden "Tendencia" usa `copias + 2 × ganadas`.
+- Cuando una búsqueda de anuncios activos termina completa, los anuncios que
+  antes devolvía y ya no aparecen se marcan como inactivos y dejan de contar.
 
 Lo mismo, resumido en la terminal:
 
@@ -62,7 +83,8 @@ Se guardan en `data/` (ignorado por git):
     `collation_count` (copias activas según Meta) y el JSON original completo.
   - `observations`: una fila cada vez que se vuelve a ver un anuncio, con su
     `collation_count` de ese momento. Sirve para medir crecimiento.
-  - `scrape_runs`: historial de búsquedas.
+  - `searches`: búsquedas guardadas y su frecuencia.
+  - `scrape_runs`: historial de ejecuciones.
 - `data/browser-profile/`: perfil del navegador, para no parecer una sesión nueva
   en cada ejecución.
 
@@ -78,7 +100,8 @@ repetir la búsqueda se renuevan.
 - **No inicies sesión** en la ventana del scraper. La Ad Library es pública; sin
   cuenta, lo peor que puede pasar es un bloqueo temporal de IP.
 - Haz pocas búsquedas por hora y no bajes los tiempos de espera.
-- Si Meta redirige a login o verificación, el scraper se detiene y no reintenta.
+- Si Meta redirige a login o verificación, el scraper se detiene y no reintenta,
+  y las búsquedas programadas quedan en pausa 24 horas.
 
 ## Tests
 

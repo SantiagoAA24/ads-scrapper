@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}Búsquedas guardadas{% endblock %}
+{% block content %}
+<header class="top">
+  {% set section = 'searches' %}{% include "_nav.html" %}
+</header>
+<main>
+  {% if blocked_until %}
+  <p class="notice">
+    Meta bloqueó una búsqueda hace poco. Las búsquedas programadas están en pausa hasta
+    {{ blocked_until | moment }}; conviene no lanzar ninguna a mano antes.
+  </p>
+  {% endif %}
+  {% if error %}<p class="notice">{{ error }}</p>{% endif %}
+
+  <section class="panel">
+    <h2>Nueva búsqueda</h2>
+    <form class="filters" method="post" action="/searches">
+      <input type="search" name="query" placeholder="Palabra clave, p. ej. faja reductora" required>
+      <input type="text" name="country" value="CO" size="4" maxlength="3" aria-label="País" title="Código de país (CO, MX…) o ALL">
+      <input type="number" name="max_ads" value="300" min="10" max="2000" step="10" aria-label="Máximo de anuncios" title="Máximo de anuncios por ejecución">
+      <select name="interval_hours" aria-label="Frecuencia">
+        {% for hours, label in interval_choices %}<option value="{{ hours }}">{{ label }}</option>{% endfor %}
+      </select>
+      <button type="submit" name="run_now" value="1">Guardar y buscar ahora</button>
+      <button type="submit" class="secondary">Solo guardar</button>
+    </form>
+  </section>
+
+  {% if searches %}
+  <section class="panel table-wrap">
+    <table>
+      <thead>
+        <tr><th>Búsqueda</th><th>País</th><th>Frecuencia</th><th>Última ejecución</th><th>Próxima</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for s in searches %}
+        {% set running = status.current and status.current.search_id == s.id %}
+        {% set queued = s.id in status.queued %}
+        <tr>
+          <td class="wrap">
+            <a href="/?{{ {'search': s.query ~ '|' ~ s.country} | urlencode }}">{{ s.query }}</a>
+            <div class="meta">hasta {{ s.max_ads }} anuncios{% if s.active_status != 'active' or s.media_type != 'all' %} · {{ s.active_status }} · {{ s.media_type }}{% endif %}</div>
+          </td>
+          <td>{{ s.country }}</td>
+          <td>{{ interval_labels.get(s.interval_hours or 0, 'Cada ' ~ s.interval_hours ~ ' h') }}{% if s.interval_hours and not s.enabled %} · en pausa{% endif %}</td>
+          <td>
+            {{ s.last_run_at | moment }}
+            {% if s.last_status %}<div class="meta">{{ run_status_labels.get(s.last_status, s.last_status) }} · {{ s.last_ads_seen }} vistos, {{ s.last_ads_new }} nuevos</div>{% endif %}
+          </td>
+          <td>
+            {% if running %}en curso{% elif queued %}en cola
+            {% elif s.next_run_at is none %}—
+            {% elif blocked_until %}en pausa
+            {% elif s.next_run_at <= now %}en breve
+            {% else %}{{ s.next_run_at | moment }}{% endif %}
+          </td>
+          <td>
+            <div class="row-actions">
+              {% if not running and not queued %}
+              <form method="post" action="/searches/{{ s.id }}/run"><button class="link">Buscar ahora</button></form>
+              {% endif %}
+              {% if s.interval_hours %}
+              <form method="post" action="/searches/{{ s.id }}/{{ 'pause' if s.enabled else 'resume' }}"><button class="link">{{ 'Pausar' if s.enabled else 'Reanudar' }}</button></form>
+              {% endif %}
+              <form method="post" action="/searches/{{ s.id }}/delete" onsubmit="return confirm('¿Eliminar esta búsqueda guardada? Los anuncios capturados se conservan.')"><button class="link danger">Eliminar</button></form>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  <p class="summary">
+    Las búsquedas se ejecutan de una en una, en una ventana de Chromium que se abre sola, y con una pausa
+    de 1 a 3 minutos entre ellas. Las programadas solo corren mientras este buscador esté abierto.
+    Para cambiar la frecuencia o el límite de una búsqueda, vuelve a guardarla con los mismos datos.
+  </p>
+  {% else %}
+  <div class="empty"><p>Aún no hay búsquedas guardadas. Crea la primera arriba.</p></div>
+  {% endif %}
+</main>
+{% endblock %}

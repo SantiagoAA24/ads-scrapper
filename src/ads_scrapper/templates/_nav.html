@@ -1,0 +1,8 @@
+  <div class="bar">
+    <h1><a href="/">Anuncios en tendencia</a></h1>
+    <nav class="sections">
+      <a href="/" {{ 'aria-current="page"' if section == 'ads' }}>Anuncios</a>
+      <a href="/searches" {{ 'aria-current="page"' if section == 'searches' }}>Búsquedas guardadas</a>
+    </nav>
+    <span id="job" {{ 'data-reload="1"' if section == 'searches' }}></span>
+  </div>

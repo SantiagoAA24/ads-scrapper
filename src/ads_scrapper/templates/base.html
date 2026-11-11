@@ -3,19 +3,20 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="referrer" content="no-referrer">
 <title>{% block title %}Anuncios en tendencia{% endblock %}</title>
 <style>
 :root {
   --bg: #f4f5f7; --surface: #fff; --text: #16181d; --muted: #646b78;
   --line: #dfe2e8; --accent: #1558d6; --accent-soft: #e6eefc;
   --hot: #b3260c; --hot-soft: #fde8e2; --media: #e9ebf0;
+  --up: #12703a; --up-soft: #dff3e6;
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #101216; --surface: #1a1d23; --text: #e8eaee; --muted: #9aa2b1;
     --line: #2c313a; --accent: #7fb0ff; --accent-soft: #1c2a44;
     --hot: #ff9a80; --hot-soft: #40201a; --media: #23272f;
+    --up: #7ddba0; --up-soft: #173524;
   }
 }
 * { box-sizing: border-box; }
@@ -26,8 +27,12 @@ a:hover { text-decoration: underline; }
 header.top { background: var(--surface); border-bottom: 1px solid var(--line);
   padding: 14px 20px; position: sticky; top: 0; z-index: 2; }
 main { padding: 20px; max-width: 1500px; margin: 0 auto; }
-h1 { font-size: 18px; margin: 0 0 12px; }
+.bar { display: flex; align-items: baseline; gap: 20px; margin-bottom: 12px; }
+h1 { font-size: 18px; margin: 0; }
 h1 a { color: inherit; }
+nav.sections { display: flex; gap: 16px; }
+nav.sections a[aria-current] { color: var(--text); font-weight: 600; }
+#job { margin-left: auto; color: var(--muted); font-size: 14px; }
 form.filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 input, select, button { font: inherit; color: var(--text); background: var(--surface);
   border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; }
@@ -48,6 +53,10 @@ label.check input { padding: 0; }
   padding: 3px 10px; font-weight: 700; font-size: 13px;
   background: var(--surface); color: var(--muted); border: 1px solid var(--line); }
 .badge.hot { background: var(--hot-soft); color: var(--hot); border-color: transparent; }
+.badges { position: absolute; top: 10px; left: 10px; z-index: 1; display: flex; gap: 6px; }
+.badges .badge { position: static; }
+.badge.up { background: var(--up-soft); color: var(--up); border-color: transparent; }
+.badge.down { background: var(--surface); color: var(--muted); }
 .format { position: absolute; top: 10px; right: 10px; z-index: 1; border-radius: 6px;
   padding: 2px 8px; font-size: 12px; background: var(--surface); color: var(--muted); }
 .body { padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; flex: 1; }
@@ -63,10 +72,52 @@ label.check input { padding: 0; }
 .empty { background: var(--surface); border: 1px dashed var(--line); border-radius: 12px;
   padding: 36px 20px; text-align: center; color: var(--muted); }
 .empty code { background: var(--media); padding: 2px 6px; border-radius: 5px; color: var(--text); }
+.notice { background: var(--hot-soft); color: var(--hot); border-radius: 10px; padding: 10px 14px; margin: 0 0 16px; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin-bottom: 20px; }
+.panel h2 { font-size: 15px; margin: 0 0 12px; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; }
+th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; white-space: nowrap; }
+th { color: var(--muted); font-weight: 500; font-size: 13px; }
+td.wrap { white-space: normal; min-width: 180px; }
+tr:last-child td { border-bottom: 0; }
+td form { display: inline; }
+button.link { background: none; border: 0; padding: 0; color: var(--accent); font-weight: 400; cursor: pointer; }
+button.link:hover { text-decoration: underline; }
+button.link.danger { color: var(--hot); }
+button.secondary { background: var(--surface); color: var(--accent); border-color: var(--line); }
+.row-actions { display: flex; gap: 14px; }
 .pager { display: flex; gap: 16px; justify-content: center; margin: 24px 0 8px; }
 </style>
 </head>
 <body>
 {% block content %}{% endblock %}
+<script>
+// Muestra en la cabecera la búsqueda que se está ejecutando.
+(function () {
+  const el = document.getElementById('job');
+  if (!el) return;
+  let wasBusy = false;
+  async function poll() {
+    try {
+      const s = await (await fetch('/api/status')).json();
+      const busy = Boolean(s.current) || s.queued.length > 0;
+      if (s.current) {
+        el.textContent = 'Buscando «' + s.current.label + '»: ' + s.current.ads_seen + ' anuncios'
+          + (s.queued.length ? ' · ' + s.queued.length + ' en cola' : '');
+      } else if (s.queued.length) {
+        el.textContent = s.queued.length + ' en cola; esperando antes de la siguiente';
+      } else {
+        el.textContent = s.last_error ? 'Error: ' + s.last_error : '';
+      }
+      // Al terminar, recarga para mostrar los resultados nuevos.
+      if (wasBusy && !busy && el.dataset.reload) location.reload();
+      wasBusy = busy;
+    } catch (e) { el.textContent = ''; }
+  }
+  poll();
+  setInterval(poll, 3000);
+})();
+</script>
 </body>
 </html>

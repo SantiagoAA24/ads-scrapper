@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+import threading
 import time
 from pathlib import Path
 from typing import Any, Iterable
@@ -12,10 +13,27 @@ from typing import Any, Iterable
 from .parser import content_hash
 
 DEFAULT_DB_PATH = Path("data/ads.db")
+_SETUP_LOCK = threading.Lock()
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS searches (
+    id             INTEGER PRIMARY KEY,
+    query          TEXT NOT NULL,
+    country        TEXT NOT NULL DEFAULT 'ALL',
+    active_status  TEXT NOT NULL DEFAULT 'active',
+    media_type     TEXT NOT NULL DEFAULT 'all',
+    max_ads        INTEGER NOT NULL DEFAULT 300,
+    -- NULL: only runs when asked.
+    interval_hours INTEGER,
+    enabled        INTEGER NOT NULL DEFAULT 1,
+    created_at     INTEGER NOT NULL,
+    last_run_at    INTEGER,
+    UNIQUE (query, country, active_status, media_type)
+);
+
 CREATE TABLE IF NOT EXISTS scrape_runs (
     id            INTEGER PRIMARY KEY,
+    search_id     INTEGER REFERENCES searches(id) ON DELETE SET NULL,
     query         TEXT,
     country       TEXT,
     source        TEXT NOT NULL,
@@ -99,7 +117,11 @@ END;
 # destination they use. Meta's own grouping (collation) is narrower: it splits the
 # same text into one collation per creative.
 GROUP_KEY = "COALESCE(a.content_hash, 'c' || a.collation_id, 'a' || a.ad_archive_id)"
+# Trend = copies now, plus double weight for copies gained in this window.
+TREND_DAYS = 7
+BLOCK_COOLDOWN_HOURS = 24
 SORTS = {
+    "trend": "(g.copies + 2 * g.growth) DESC, g.copies DESC, s.last_start DESC",
     "copies": "g.copies DESC, s.last_start DESC",
     "recent": "s.last_start DESC, g.copies DESC",
     "oldest": "s.first_start ASC, g.copies DESC",
@@ -118,16 +140,21 @@ _AD_COLUMNS = (
 def connect(path: str | Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path)
+    conn = sqlite3.connect(path, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
-    conn.executescript(SCHEMA)
-    if not conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'ads_fts'").fetchone():
-        conn.executescript(FTS_SCHEMA)
-        # Index ads stored before the search index existed.
-        conn.execute("INSERT INTO ads_fts (ads_fts) VALUES ('rebuild')")
-        conn.commit()
-    _migrate(conn)
+    # The web UI reads while a scrape writes from another thread.
+    conn.execute("PRAGMA journal_mode = WAL")
+    # The web app opens connections from several threads; only one of them
+    # may create or upgrade the schema.
+    with _SETUP_LOCK:
+        conn.executescript(SCHEMA)
+        if not conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'ads_fts'").fetchone():
+            conn.executescript(FTS_SCHEMA)
+            # Index ads stored before the search index existed.
+            conn.execute("INSERT INTO ads_fts (ads_fts) VALUES ('rebuild')")
+            conn.commit()
+        _migrate(conn)
     return conn
 
 
@@ -142,13 +169,145 @@ def _migrate(conn: sqlite3.Connection) -> None:
             )
         conn.execute("PRAGMA user_version = 1")
         conn.commit()
+    if version < 2:
+        columns = [row["name"] for row in conn.execute("PRAGMA table_info(scrape_runs)")]
+        if "search_id" not in columns:
+            conn.execute("ALTER TABLE scrape_runs ADD COLUMN search_id INTEGER REFERENCES searches(id) ON DELETE SET NULL")
+        # Turn searches already run from the terminal into saved searches.
+        for row in conn.execute(
+            "SELECT query, country, MAX(started_at) AS last FROM scrape_runs "
+            "WHERE source = 'scrape' AND query IS NOT NULL GROUP BY query, country"
+        ).fetchall():
+            search_id = save_search(conn, row["query"], row["country"] or "ALL")
+            conn.execute("UPDATE searches SET last_run_at = ? WHERE id = ?", (row["last"], search_id))
+            conn.execute(
+                "UPDATE scrape_runs SET search_id = ? WHERE source = 'scrape' AND query IS ? AND country IS ?",
+                (search_id, row["query"], row["country"]),
+            )
+        conn.execute("PRAGMA user_version = 2")
+        conn.commit()
 
 
-def start_run(conn: sqlite3.Connection, query: str | None, country: str | None, source: str) -> int:
+def save_search(
+    conn: sqlite3.Connection,
+    query: str,
+    country: str = "ALL",
+    active_status: str = "active",
+    media_type: str = "all",
+    max_ads: int | None = None,
+    interval_hours: int | None = None,
+    update: bool = False,
+) -> int:
+    """Create a saved search or return the existing one with the same filters.
+
+    With ``update``, an existing search also takes the given limit and schedule.
+    """
+    query, country = query.strip(), (country or "ALL").strip().upper()
+    key = (query, country, active_status, media_type)
+    row = conn.execute(
+        "SELECT id FROM searches WHERE query = ? AND country = ? AND active_status = ? AND media_type = ?",
+        key,
+    ).fetchone()
+    if row:
+        if update:
+            conn.execute(
+                "UPDATE searches SET max_ads = COALESCE(?, max_ads), interval_hours = ? WHERE id = ?",
+                (max_ads, interval_hours, row["id"]),
+            )
+        elif max_ads:
+            conn.execute("UPDATE searches SET max_ads = ? WHERE id = ?", (max_ads, row["id"]))
+        conn.commit()
+        return row["id"]
     cursor = conn.execute(
-        "INSERT INTO scrape_runs (query, country, source, started_at) VALUES (?, ?, ?, ?)",
-        (query, country, source, int(time.time())),
+        "INSERT INTO searches (query, country, active_status, media_type, max_ads, interval_hours, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (*key, max_ads or 300, interval_hours, int(time.time())),
     )
+    conn.commit()
+    return cursor.lastrowid
+
+
+def get_search(conn: sqlite3.Connection, search_id: int) -> sqlite3.Row | None:
+    return conn.execute("SELECT * FROM searches WHERE id = ?", (search_id,)).fetchone()
+
+
+def saved_searches(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Saved searches with their latest run and when the next one is due."""
+    return conn.execute(
+        """
+        SELECT s.*, r.status AS last_status, r.ads_seen AS last_ads_seen, r.ads_new AS last_ads_new,
+               CASE WHEN s.interval_hours IS NOT NULL AND s.enabled = 1
+                    THEN COALESCE(s.last_run_at + s.interval_hours * 3600, 0) END AS next_run_at
+        FROM searches s
+        LEFT JOIN scrape_runs r ON r.id = (
+            SELECT id FROM scrape_runs WHERE search_id = s.id ORDER BY id DESC LIMIT 1
+        )
+        ORDER BY s.query COLLATE NOCASE, s.country
+        """
+    ).fetchall()
+
+
+def due_searches(conn: sqlite3.Connection, now: int | None = None) -> list[sqlite3.Row]:
+    """Scheduled searches whose interval has elapsed, longest overdue first."""
+    now = int(time.time()) if now is None else now
+    return conn.execute(
+        "SELECT * FROM searches WHERE enabled = 1 AND interval_hours IS NOT NULL "
+        "AND COALESCE(last_run_at, 0) + interval_hours * 3600 <= ? ORDER BY COALESCE(last_run_at, 0)",
+        (now,),
+    ).fetchall()
+
+
+def set_search_enabled(conn: sqlite3.Connection, search_id: int, enabled: bool) -> None:
+    conn.execute("UPDATE searches SET enabled = ? WHERE id = ?", (int(enabled), search_id))
+    conn.commit()
+
+
+def delete_search(conn: sqlite3.Connection, search_id: int) -> None:
+    """Forget a saved search. The ads it found stay."""
+    conn.execute("DELETE FROM searches WHERE id = ?", (search_id,))
+    conn.commit()
+
+
+def blocked_until(conn: sqlite3.Connection, now: int | None = None) -> int | None:
+    """If Meta blocked a recent run, when automatic runs may resume."""
+    now = int(time.time()) if now is None else now
+    row = conn.execute("SELECT MAX(started_at) FROM scrape_runs WHERE status = 'blocked'").fetchone()
+    until = (row[0] or 0) + BLOCK_COOLDOWN_HOURS * 3600
+    return until if row[0] and until > now else None
+
+
+def mark_missing_inactive(conn: sqlite3.Connection, search_id: int, run_id: int) -> int:
+    """After a run that listed every active result of a search, ads that this
+    search used to return and no longer does have stopped running."""
+    cursor = conn.execute(
+        """
+        UPDATE ads SET is_active = 0
+        WHERE is_active = 1
+          AND ad_archive_id IN (
+              SELECT o.ad_archive_id FROM observations o
+              JOIN scrape_runs r ON r.id = o.run_id WHERE r.search_id = ?)
+          AND ad_archive_id NOT IN (SELECT ad_archive_id FROM observations WHERE run_id = ?)
+        """,
+        (search_id, run_id),
+    )
+    conn.commit()
+    return cursor.rowcount
+
+
+def start_run(
+    conn: sqlite3.Connection,
+    query: str | None,
+    country: str | None,
+    source: str,
+    search_id: int | None = None,
+) -> int:
+    now = int(time.time())
+    cursor = conn.execute(
+        "INSERT INTO scrape_runs (query, country, source, started_at, search_id) VALUES (?, ?, ?, ?, ?)",
+        (query, country, source, now, search_id),
+    )
+    if search_id is not None:
+        conn.execute("UPDATE searches SET last_run_at = ? WHERE id = ?", (now, search_id))
     conn.commit()
     return cursor.lastrowid
 
@@ -209,15 +368,18 @@ def search_groups(
     display_format: str | None = None,
     active_only: bool = False,
     max_age_days: int | None = None,
-    min_copies: int = 1,
-    sort: str = "copies",
+    min_copies: int = 0,
+    sort: str = "trend",
     limit: int = 20,
     offset: int = 0,
 ) -> list[sqlite3.Row]:
     """Duplicate groups matching the filters, one representative ad per group.
 
-    ``copies`` adds up Meta's count for every creative in the group; ``search``
-    is a (query, country) pair restricting to ads seen in those scrapes.
+    ``copies`` adds up Meta's count for every creative still running in the
+    group. ``growth`` is how many of those were gained in the last TREND_DAYS:
+    against the count observed back then, or counting a creative as new when
+    it started inside the window. ``search`` is a (query, country) pair
+    restricting to ads seen in those scrapes.
     """
     conditions, params = ["1 = 1"], []
     match = _fts_query(text)
@@ -240,6 +402,7 @@ def search_groups(
     if max_age_days:
         conditions.append("a.start_date >= ?")
         params.append(int(time.time()) - max_age_days * 86400)
+    cutoff = int(time.time()) - TREND_DAYS * 86400
 
     sql = f"""
         WITH f AS (
@@ -248,12 +411,27 @@ def search_groups(
             FROM ads a WHERE {' AND '.join(conditions)}
         ),
         collations AS (
-            SELECT group_key, MAX(COALESCE(collation_count, 1)) AS copies
+            SELECT group_key, collation_key, MIN(start_date) AS started,
+                   MAX(CASE WHEN is_active = 0 THEN 0 ELSE COALESCE(collation_count, 1) END) AS copies
             FROM f GROUP BY group_key, collation_key
         ),
+        history AS (
+            SELECT c.*, (
+                SELECT o.collation_count FROM observations o
+                JOIN ads past ON past.ad_archive_id = o.ad_archive_id
+                WHERE (past.collation_id = c.collation_key OR past.ad_archive_id = c.collation_key)
+                  AND o.observed_at <= ? AND o.collation_count IS NOT NULL
+                ORDER BY o.observed_at DESC LIMIT 1
+            ) AS copies_before
+            FROM collations c
+        ),
         g AS (
-            SELECT group_key, SUM(copies) AS copies, COUNT(*) AS creatives
-            FROM collations GROUP BY group_key
+            SELECT group_key, SUM(copies) AS copies, COUNT(*) AS creatives,
+                   SUM(copies - CASE
+                       WHEN copies_before IS NOT NULL THEN copies_before
+                       WHEN started > ? THEN 0
+                       ELSE copies END) AS growth
+            FROM history GROUP BY group_key
         ),
         s AS (
             SELECT group_key, COUNT(*) AS stored, COUNT(DISTINCT page_id) AS pages,
@@ -267,13 +445,13 @@ def search_groups(
             ) AS position
             FROM f
         )
-        SELECT ranked.*, g.copies, g.creatives, s.stored, s.pages, s.first_start, s.last_start
+        SELECT ranked.*, g.copies, g.creatives, g.growth, s.stored, s.pages, s.first_start, s.last_start
         FROM ranked JOIN g USING (group_key) JOIN s USING (group_key)
         WHERE ranked.position = 1 AND g.copies >= ?
-        ORDER BY {SORTS.get(sort, SORTS['copies'])}
+        ORDER BY {SORTS.get(sort, SORTS['trend'])}
         LIMIT ? OFFSET ?
     """
-    return conn.execute(sql, [*params, min_copies, limit, offset]).fetchall()
+    return conn.execute(sql, [*params, cutoff, cutoff, min_copies, limit, offset]).fetchall()
 
 
 def group_ads(conn: sqlite3.Connection, group_key: str) -> list[sqlite3.Row]:

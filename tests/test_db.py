@@ -1,4 +1,5 @@
 import copy
+import time
 
 from ads_scrapper import db, parser
 
@@ -120,3 +121,114 @@ def test_old_fingerprints_are_recomputed(tmp_path, payload_text):
     conn.close()
     conn = db.connect(tmp_path / "ads.db")
     assert len(db.search_groups(conn, limit=50)) == 25
+
+
+def _ad(payload_text, ad_id, collation, count, **changes):
+    base = next(a for a in parser.parse_text(payload_text).ads if a["ad_archive_id"] == "1366790451211212")
+    return {**base, "ad_archive_id": ad_id, "collation_id": collation, "collation_count": count, **changes}
+
+
+def _backdate(conn, run_id, days):
+    conn.execute("UPDATE observations SET observed_at = observed_at - ? WHERE run_id = ?", (days * 86400, run_id))
+    conn.commit()
+
+
+def test_growth_compares_with_the_count_seen_a_week_ago(tmp_path, payload_text):
+    conn = db.connect(tmp_path / "ads.db")
+    old = time.time() - 60 * 86400
+    first = db.start_run(conn, None, None, "import")
+    db.save_ads(conn, first, [_ad(payload_text, "1", "A", 2, start_date=old)])
+    _backdate(conn, first, 10)
+    db.save_ads(conn, db.start_run(conn, None, None, "import"), [_ad(payload_text, "1", "A", 7, start_date=old)])
+
+    (row,) = db.search_groups(conn)
+    assert (row["copies"], row["growth"]) == (7, 5)
+
+
+def test_growth_counts_new_creatives_but_not_old_ones_first_seen_today(tmp_path, payload_text):
+    conn = db.connect(tmp_path / "ads.db")
+    now = time.time()
+    ads = [
+        _ad(payload_text, "1", "A", 4, start_date=now - 60 * 86400),  # old, never seen before: unknown
+        _ad(payload_text, "2", "B", 3, start_date=now - 2 * 86400),  # launched this week: all new
+    ]
+    db.save_ads(conn, db.start_run(conn, None, None, "import"), ads)
+
+    (row,) = db.search_groups(conn)
+    assert (row["copies"], row["growth"]) == (7, 3)
+
+
+def test_trend_sort_puts_growing_groups_first(tmp_path, payload_text):
+    conn = db.connect(tmp_path / "ads.db")
+    now = time.time()
+    ads = [
+        _ad(payload_text, "1", "A", 6, start_date=now - 90 * 86400, body_text="estable", content_hash="h1"),
+        _ad(payload_text, "2", "B", 4, start_date=now - 86400, body_text="subiendo", content_hash="h2"),
+    ]
+    db.save_ads(conn, db.start_run(conn, None, None, "import"), ads)
+
+    assert [r["body_text"] for r in db.search_groups(conn, sort="trend")] == ["subiendo", "estable"]
+    assert [r["body_text"] for r in db.search_groups(conn, sort="copies")] == ["estable", "subiendo"]
+
+
+def test_saved_search_is_reused_and_normalised(tmp_path):
+    conn = db.connect(tmp_path / "ads.db")
+    first = db.save_search(conn, " faja ", "co", max_ads=100)
+    assert db.save_search(conn, "faja", "CO") == first
+    assert db.get_search(conn, first)["max_ads"] == 100
+    db.save_search(conn, "faja", "CO", max_ads=50, interval_hours=24, update=True)
+    row = db.get_search(conn, first)
+    assert (row["query"], row["country"], row["max_ads"], row["interval_hours"]) == ("faja", "CO", 50, 24)
+    assert db.save_search(conn, "faja", "MX") != first
+
+
+def test_due_searches_follow_the_schedule(tmp_path):
+    conn = db.connect(tmp_path / "ads.db")
+    manual = db.save_search(conn, "manual", "CO")
+    daily = db.save_search(conn, "diaria", "CO", interval_hours=24)
+    paused = db.save_search(conn, "pausada", "CO", interval_hours=24)
+    db.set_search_enabled(conn, paused, False)
+
+    assert [s["id"] for s in db.due_searches(conn)] == [daily]  # never run: due at once
+    db.start_run(conn, "diaria", "CO", "scrape", daily)
+    assert db.due_searches(conn) == []
+    assert [s["id"] for s in db.due_searches(conn, now=int(time.time()) + 25 * 3600)] == [daily]
+    assert manual not in [s["id"] for s in db.due_searches(conn, now=int(time.time()) + 10**7)]
+
+
+def test_ads_missing_from_a_complete_run_become_inactive(tmp_path, payload_text):
+    conn = db.connect(tmp_path / "ads.db")
+    search = db.save_search(conn, "faja", "CO")
+    other = db.save_search(conn, "otra", "CO")
+    first = db.start_run(conn, "faja", "CO", "scrape", search)
+    db.save_ads(conn, first, [_ad(payload_text, "1", "A", 3), _ad(payload_text, "2", "B", 1)])
+    db.save_ads(conn, db.start_run(conn, "otra", "CO", "scrape", other), [_ad(payload_text, "9", "Z", 1, body_text="x", content_hash="z")])
+
+    second = db.start_run(conn, "faja", "CO", "scrape", search)
+    db.save_ads(conn, second, [_ad(payload_text, "2", "B", 1)])
+    assert db.mark_missing_inactive(conn, search, second) == 1
+
+    active = dict(conn.execute("SELECT ad_archive_id, is_active FROM ads"))
+    assert active == {"1": 0, "2": 1, "9": 1}
+    row = next(r for r in db.search_groups(conn) if r["group_key"] != "z")
+    assert row["copies"] == 1  # the stopped creative no longer counts
+
+
+def test_block_pauses_automatic_runs_for_a_day(tmp_path):
+    conn = db.connect(tmp_path / "ads.db")
+    assert db.blocked_until(conn) is None
+    db.finish_run(conn, db.start_run(conn, "faja", "CO", "scrape"), "blocked")
+    assert db.blocked_until(conn) > time.time()
+    assert db.blocked_until(conn, now=int(time.time()) + 25 * 3600) is None
+
+
+def test_terminal_searches_from_older_databases_become_saved_searches(tmp_path):
+    conn = db.connect(tmp_path / "ads.db")
+    conn.execute("INSERT INTO scrape_runs (query, country, source, started_at, status) VALUES ('faja reductora', 'CO', 'scrape', 100, 'completed')")
+    conn.execute("PRAGMA user_version = 1")
+    conn.commit()
+    conn.close()
+
+    conn = db.connect(tmp_path / "ads.db")
+    (search,) = db.saved_searches(conn)
+    assert (search["query"], search["country"], search["last_run_at"], search["last_status"]) == ("faja reductora", "CO", 100, "completed")

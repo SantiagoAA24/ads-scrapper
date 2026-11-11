@@ -2,7 +2,7 @@
 {% block title %}{{ ads[0].page_name or "Grupo" }} · {{ ads | length }} anuncios{% endblock %}
 {% block content %}
 <header class="top">
-  <h1><a href="/">← Anuncios en tendencia</a></h1>
+  {% set section = 'ads' %}{% include "_nav.html" %}
   <div class="meta">
     {{ ads | length }} anuncios guardados con el mismo texto
     {%- if pages %} · {{ pages | join(", ") }}{% endif %}
@@ -11,7 +11,8 @@
 <main>
   <div class="grid">
     {% for ad in ads %}
-      {% set copies = ad.collation_count or 1 %}
+      {% set copies = 0 if ad.is_active == 0 else (ad.collation_count or 1) %}
+      {% set growth = 0 %}
       {% set full_copy = loop.first %}
       {% set group_link = none %}
       {% set detail = "ID " ~ ad.ad_archive_id %}

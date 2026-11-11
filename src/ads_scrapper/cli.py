@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import random
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 from . import db, parser
-from .scraper import ScrapeOptions, scrape
+from .runs import run_search
 
 STATUS_MESSAGES = {
     "completed": "Búsqueda completa: Meta no tiene más resultados.",
@@ -38,10 +40,16 @@ def _build_parser() -> argparse.ArgumentParser:
     scrape_cmd.add_argument("--max-ads", type=int, default=300)
     scrape_cmd.add_argument("--status", default="active", choices=["active", "inactive", "all"])
     scrape_cmd.add_argument("--media", default="all", choices=["all", "image", "video", "meme", "none"])
-    scrape_cmd.add_argument("--headless", action="store_true", help="sin ventana (más fácil de detectar)")
-    scrape_cmd.add_argument("--min-delay", type=float, default=2.0)
-    scrape_cmd.add_argument("--max-delay", type=float, default=5.0)
     scrape_cmd.set_defaults(handler=_cmd_scrape)
+
+    refresh_cmd = commands.add_parser("refresh", help="repetir las búsquedas guardadas pendientes")
+    refresh_cmd.add_argument("--all", action="store_true", help="todas, no solo las programadas que tocan")
+    refresh_cmd.set_defaults(handler=_cmd_refresh)
+
+    for command in (scrape_cmd, refresh_cmd):
+        command.add_argument("--headless", action="store_true", help="sin ventana (más fácil de detectar)")
+        command.add_argument("--min-delay", type=float, default=2.0)
+        command.add_argument("--max-delay", type=float, default=5.0)
 
     import_cmd = commands.add_parser("import", help="cargar respuestas JSON guardadas a mano")
     import_cmd.add_argument("files", nargs="+", type=Path)
@@ -65,27 +73,39 @@ def _cmd_scrape(conn, args) -> int:
     if args.min_delay > args.max_delay:
         print("--min-delay no puede ser mayor que --max-delay", file=sys.stderr)
         return 2
-    options = ScrapeOptions(
-        query=args.query,
-        country=args.country.upper(),
-        active_status=args.status,
-        media_type=args.media,
-        max_ads=args.max_ads,
-        headless=args.headless,
-        min_delay=args.min_delay,
-        max_delay=args.max_delay,
-    )
-    run_id = db.start_run(conn, options.query, options.country, "scrape")
-    status = "error"
+    # Every search run from here is also kept as a saved search.
+    search_id = db.save_search(conn, args.query, args.country, args.status, args.media, args.max_ads)
+    return _run(conn, db.get_search(conn, search_id), args)
+
+
+def _cmd_refresh(conn, args) -> int:
+    searches = db.saved_searches(conn) if args.all else db.due_searches(conn)
+    if not searches:
+        print("No hay búsquedas guardadas pendientes.")
+        return 0
+    if not args.all and db.blocked_until(conn):
+        print("Meta bloqueó una búsqueda hace poco; las automáticas están en pausa.", file=sys.stderr)
+        return 1
+    for position, search in enumerate(searches):
+        if position:
+            pause = random.uniform(60, 180)
+            print(f"Esperando {pause:.0f} s antes de la siguiente búsqueda…")
+            time.sleep(pause)
+        print(f"== {search['query']} · {search['country']}")
+        code = _run(conn, search, args)
+        if code:
+            return code  # blocked or interrupted: do not insist
+    return 0
+
+
+def _run(conn, search, args) -> int:
     try:
-        result = scrape(options, lambda ads: db.save_ads(conn, run_id, ads))
-        status = result.status
+        result = run_search(
+            conn, search, headless=args.headless, min_delay=args.min_delay, max_delay=args.max_delay
+        )
     except KeyboardInterrupt:
-        status = "interrupted"
         print("\nInterrumpido; lo capturado hasta ahora quedó guardado.")
         return 130
-    finally:
-        db.finish_run(conn, run_id, status)
     print(STATUS_MESSAGES[result.status])
     print(f"{result.ads_seen} anuncios vistos, {result.ads_new} nuevos en la base.")
     return 1 if result.status == "blocked" else 0
@@ -124,6 +144,8 @@ def _cmd_top(conn, args) -> int:
         )
         text = " ".join((row["body_text"] or row["title"] or "").split())
         extra = f"  ({row['creatives']} creativos)" if row["creatives"] > 1 else ""
+        if row["growth"]:
+            extra += f"  {row['growth']:+d} en {db.TREND_DAYS} días"
         print(f"x{row['copies']:<4} {started}  {row['page_name'] or '?'}  [{row['link_domain'] or '-'}]{extra}")
         print(f"      {text[:110]}")
         print(f"      {parser.ad_url(row['ad_archive_id'])}")
@@ -140,6 +162,7 @@ def _cmd_web(conn, args) -> int:
 
     url = f"http://127.0.0.1:{args.port}"
     print(f"Buscador en {url} (Ctrl+C para cerrar)")
+    print("Las búsquedas programadas se ejecutan mientras esto siga abierto.")
     if not args.no_browser:
         threading.Timer(1.0, webbrowser.open, [url]).start()
     # Only this machine can reach it: bound to localhost.

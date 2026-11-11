@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
 <header class="top">
-  <h1><a href="/">Anuncios en tendencia</a></h1>
+  {% set section = 'ads' %}{% include "_nav.html" %}
   <form class="filters" method="get" action="/">
     <input type="search" name="q" value="{{ filters.q }}" placeholder="Buscar en texto, anunciante o dominio" autofocus>
     <select name="search" aria-label="Búsqueda de origen">
@@ -36,11 +36,12 @@
   {% if groups %}
     <p class="summary">
       {{ total_ads }} anuncios guardados. Cada tarjeta agrupa los que comparten el mismo texto;
-      × es el total de copias activas según Meta.
+      × es el total de copias activas según Meta y el verde, las ganadas en los últimos {{ trend_days }} días.
     </p>
     <div class="grid">
       {% for ad in groups %}
         {% set copies = ad.copies %}
+        {% set growth = ad.growth %}
         {% set full_copy = false %}
         {% set group_link = "/group/" ~ (ad.group_key | urlencode) if ad.stored > 1 else none %}
         {% set parts = [] %}
@@ -59,7 +60,7 @@
   {% elif total_ads == 0 %}
     <div class="empty">
       <p>Todavía no hay anuncios guardados.</p>
-      <p>Ejecuta una búsqueda en la terminal: <code>ads-scrapper scrape "faja reductora" --country CO</code></p>
+      <p><a href="/searches">Crea tu primera búsqueda</a> para empezar a capturar.</p>
     </div>
   {% else %}
     <div class="empty">
