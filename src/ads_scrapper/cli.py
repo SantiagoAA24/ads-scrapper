@@ -9,7 +9,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import db, parser
+from . import db, media, parser
 from .runs import run_search
 
 STATUS_MESSAGES = {
@@ -61,6 +61,9 @@ def _build_parser() -> argparse.ArgumentParser:
     top_cmd.add_argument("text", nargs="?", help="filtrar por texto, anunciante o dominio")
     top_cmd.add_argument("--limit", type=int, default=20)
     top_cmd.set_defaults(handler=_cmd_top)
+
+    media_cmd = commands.add_parser("media", help="descargar las vistas previas que falten")
+    media_cmd.set_defaults(handler=_cmd_media)
 
     web_cmd = commands.add_parser("web", help="abrir el buscador local en el navegador")
     web_cmd.add_argument("--port", type=int, default=8000)
@@ -149,6 +152,15 @@ def _cmd_top(conn, args) -> int:
         print(f"x{row['copies']:<4} {started}  {row['page_name'] or '?'}  [{row['link_domain'] or '-'}]{extra}")
         print(f"      {text[:110]}")
         print(f"      {parser.ad_url(row['ad_archive_id'])}")
+    return 0
+
+
+def _cmd_media(conn, args) -> int:
+    saved, failed = media.download_previews(conn)
+    if not saved and not failed:
+        print("No falta ninguna vista previa.")
+    elif failed:
+        print("Las no disponibles tienen la URL caducada; se renuevan al repetir su búsqueda.")
     return 0
 
 

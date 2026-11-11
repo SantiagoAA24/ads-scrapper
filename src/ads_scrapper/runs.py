@@ -10,7 +10,7 @@ from collections import deque
 from pathlib import Path
 from typing import Any, Callable
 
-from . import db
+from . import db, media
 from .scraper import ScrapeOptions, ScrapeResult, scrape
 
 
@@ -21,9 +21,10 @@ def run_search(
     scrape_fn: Callable[..., ScrapeResult] = scrape,
     log: Callable[[str], None] = print,
     on_progress: Callable[[int], None] | None = None,
+    download_previews: Callable[..., Any] | None = media.download_previews,
     **option_overrides: Any,
 ) -> ScrapeResult:
-    """Scrape one saved search and record the run."""
+    """Scrape one saved search, record the run and keep the previews."""
     options = ScrapeOptions(
         query=search["query"],
         country=search["country"],
@@ -55,6 +56,11 @@ def run_search(
     # Only a full listing of active ads proves that a missing ad has stopped.
     if result.status == "completed" and result.ads_seen and options.active_status == "active":
         db.mark_missing_inactive(conn, search["id"], run_id)
+    if download_previews and result.ads_seen:
+        try:
+            download_previews(conn, run_id, log=log)
+        except Exception as error:  # previews are a nicety; the run itself is done
+            log(f"No se pudieron guardar las vistas previas: {error}")
     return result
 
 

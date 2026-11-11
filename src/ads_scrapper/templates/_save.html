@@ -1,0 +1,25 @@
+{# Favourite toggle and tags for one group. Needs: group_key, saved, group_tags, here, tags. #}
+<div class="save">
+  <form method="post" action="/saved/{{ group_key }}">
+    <input type="hidden" name="next" value="{{ here }}">
+    <button class="star {{ 'on' if saved }}" name="action" value="{{ 'unsave' if saved else 'save' }}"
+            title="{{ 'Quitar de guardados (borra sus etiquetas)' if saved else 'Guardar este anuncio' }}">
+      {{ '★ Guardado' if saved else '☆ Guardar' }}
+    </button>
+  </form>
+  {% if saved %}
+    {% for tag in group_tags %}
+    <form method="post" action="/saved/{{ group_key }}" class="tag">
+      <input type="hidden" name="next" value="{{ here }}">
+      <input type="hidden" name="tag" value="{{ tag }}">
+      <a href="/?{{ {'tag': tag} | urlencode }}">{{ tag }}</a>
+      <button name="action" value="untag" aria-label="Quitar etiqueta {{ tag }}" title="Quitar etiqueta">×</button>
+    </form>
+    {% endfor %}
+    <form method="post" action="/saved/{{ group_key }}" class="add-tag">
+      <input type="hidden" name="next" value="{{ here }}">
+      <input type="hidden" name="action" value="tag">
+      <input type="text" name="tag" placeholder="+ etiqueta" maxlength="40" list="known-tags" aria-label="Añadir etiqueta" required>
+    </form>
+  {% endif %}
+</div>

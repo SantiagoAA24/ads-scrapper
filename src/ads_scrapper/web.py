@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from . import db, parser
@@ -70,6 +71,12 @@ def create_app(db_path: str | Path = db.DEFAULT_DB_PATH, runner: Runner | None =
         run_status_labels=RUN_STATUS_LABELS,
     )
 
+    setup = db.connect(db_path)
+    media_folder = db.media_dir(setup)
+    setup.close()
+    media_folder.mkdir(parents=True, exist_ok=True)
+    app.mount("/media", StaticFiles(directory=media_folder), name="media")
+
     @app.get("/", response_class=HTMLResponse)
     def index(
         request: Request,
@@ -79,6 +86,8 @@ def create_app(db_path: str | Path = db.DEFAULT_DB_PATH, runner: Runner | None =
         age: str = "",
         min_copies: str = "",
         active: str = "",
+        saved: str = "",
+        tag: str = "",
         sort: str = "trend",
         page: str = "1",
     ):
@@ -99,18 +108,21 @@ def create_app(db_path: str | Path = db.DEFAULT_DB_PATH, runner: Runner | None =
                 active_only=active == "1",
                 max_age_days=_int(age, 0) or None,
                 min_copies=copies,
+                saved_only=saved == "1",
+                tag=tag or None,
                 sort=sort,
                 limit=PAGE_SIZE + 1,
                 offset=(page_number - 1) * PAGE_SIZE,
             )
             formats = db.list_formats(conn)
+            tags = db.list_tags(conn)
             total_ads = conn.execute("SELECT COUNT(*) FROM ads").fetchone()[0]
         finally:
             conn.close()
 
         filters = {
             "q": q, "search": search, "format": format, "age": age,
-            "min_copies": str(copies) if copies else "", "active": active, "sort": sort,
+            "min_copies": str(copies) if copies else "", "active": active, "saved": saved, "tag": tag, "sort": sort,
         }
 
         def page_link(number: int) -> str:
@@ -127,6 +139,8 @@ def create_app(db_path: str | Path = db.DEFAULT_DB_PATH, runner: Runner | None =
                 "filters": filters,
                 "searches": {key: label for key, (label, _) in searches.items()},
                 "formats": formats,
+                "tags": tags,
+                "here": _here(request),
                 "age_choices": AGE_CHOICES,
                 "sort_choices": SORT_CHOICES,
                 "total_ads": total_ads,
@@ -142,6 +156,8 @@ def create_app(db_path: str | Path = db.DEFAULT_DB_PATH, runner: Runner | None =
         conn = db.connect(db_path)
         try:
             ads = db.group_ads(conn, group_key)
+            is_saved, group_tags = db.group_state(conn, group_key)
+            tags = db.list_tags(conn)
         finally:
             conn.close()
         if not ads:
@@ -149,7 +165,15 @@ def create_app(db_path: str | Path = db.DEFAULT_DB_PATH, runner: Runner | None =
         return templates.TemplateResponse(
             request,
             "group.html",
-            {"ads": ads, "pages": sorted({ad["page_name"] for ad in ads if ad["page_name"]})},
+            {
+                "ads": ads,
+                "pages": sorted({ad["page_name"] for ad in ads if ad["page_name"]}),
+                "group_key": group_key,
+                "saved": is_saved,
+                "group_tags": group_tags,
+                "tags": tags,
+                "here": _here(request),
+            },
         )
 
     @app.get("/searches", response_class=HTMLResponse)
@@ -186,6 +210,28 @@ def create_app(db_path: str | Path = db.DEFAULT_DB_PATH, runner: Runner | None =
 
     def back(error: str = "") -> RedirectResponse:
         return RedirectResponse("/searches" + (f"?{urlencode({'error': error})}" if error else ""), status_code=303)
+
+    @app.post("/saved/{group_key}", dependencies=[Depends(same_origin)])
+    def save_action(group_key: str, action: str = Form(""), tag: str = Form(""), next: str = Form("/")):
+        conn = db.connect(db_path)
+        try:
+            if not db.group_ads(conn, group_key):
+                raise HTTPException(status_code=404, detail="Grupo no encontrado")
+            if action == "save":
+                db.save_group(conn, group_key)
+            elif action == "unsave":
+                db.unsave_group(conn, group_key)
+            elif action == "tag":
+                db.add_tag(conn, group_key, tag)
+            elif action == "untag":
+                db.remove_tag(conn, group_key, tag)
+            else:
+                raise HTTPException(status_code=400, detail="Acción desconocida")
+        finally:
+            conn.close()
+        # Only ever send the browser back to a page of this app.
+        target = next if next.startswith("/") and not next.startswith("//") else "/"
+        return RedirectResponse(f"{target.split('#')[0]}#g-{group_key}", status_code=303)
 
     @app.post("/searches", dependencies=[Depends(same_origin)])
     def add_search(
@@ -234,6 +280,11 @@ def create_app(db_path: str | Path = db.DEFAULT_DB_PATH, runner: Runner | None =
         return back()
 
     return app
+
+
+def _here(request: Request) -> str:
+    """Current path and query, so actions can return to the same view."""
+    return request.url.path + (f"?{request.url.query}" if request.url.query else "")
 
 
 def _int(value: str, default: int) -> int:

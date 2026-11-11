@@ -1,14 +1,14 @@
 {# One ad. `copies` is the group total on the index, Meta's own count on the group page. #}
-<article class="card">
+<article class="card" {% if card_group_key %}id="g-{{ card_group_key }}"{% endif %}>
   <div class="media">
     <div class="badges">
       <span class="badge {{ 'hot' if copies > 1 }}">×{{ copies }}</span>
       {% if growth %}<span class="badge {{ 'up' if growth > 0 else 'down' }}" title="Cambio en {{ trend_days }} días">{{ '%+d' | format(growth) }}</span>{% endif %}
     </div>
     {% if ad.display_format %}<span class="format">{{ format_labels.get(ad.display_format, ad.display_format) }}</span>{% endif %}
-    {% if ad.preview_image_url %}
-      Vista previa caducada
-      <img src="{{ ad.preview_image_url }}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">
+    {% if ad.preview_file or ad.preview_image_url %}
+      Vista previa no disponible
+      <img src="{{ '/media/' ~ ad.preview_file if ad.preview_file else ad.preview_image_url }}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">
     {% else %}
       Sin vista previa
     {% endif %}
@@ -23,9 +23,15 @@
     {% if ad.title %}<div class="headline">{{ ad.title }}</div>{% endif %}
     {% if ad.body_text %}<p class="copy {{ 'full' if full_copy }}">{{ ad.body_text }}</p>{% endif %}
     {% if detail %}<div class="meta">{{ detail }}</div>{% endif %}
+    {% if card_group_key %}
+      {% set group_key = card_group_key %}
+      {% set saved = ad.saved %}
+      {% set group_tags = (ad.tags or '').split(',') | select | sort %}
+      {% include "_save.html" %}
+    {% endif %}
     <div class="actions">
       <a class="primary" href="{{ ad_url(ad.ad_archive_id) }}" target="_blank" rel="noopener">Ver en Ad Library</a>
-      {% if group_link %}<a href="{{ group_link }}">Ver los {{ ad.stored }} guardados</a>{% endif %}
+      {% if group_link %}<a href="{{ group_link }}">Ver los {{ ad.stored }} anuncios</a>{% endif %}
       {% if ad.link_url %}<a href="{{ ad.link_url }}" target="_blank" rel="noopener noreferrer">Destino</a>{% endif %}
     </div>
   </div>

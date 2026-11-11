@@ -44,7 +44,7 @@ label.check { display: flex; gap: 6px; align-items: center; color: var(--muted);
 label.check input { padding: 0; }
 .summary { color: var(--muted); margin: 0 0 14px; }
 .grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
-.card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+.card { scroll-margin-top: 150px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
   overflow: hidden; display: flex; flex-direction: column; }
 .media { position: relative; aspect-ratio: 4 / 3; background: var(--media);
   display: grid; place-items: center; color: var(--muted); font-size: 13px; }
@@ -87,6 +87,16 @@ button.link:hover { text-decoration: underline; }
 button.link.danger { color: var(--hot); }
 button.secondary { background: var(--surface); color: var(--accent); border-color: var(--line); }
 .row-actions { display: flex; gap: 14px; }
+.save { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 4px; }
+.save form { display: inline-flex; align-items: center; }
+.save button.star { background: none; border: 1px solid var(--line); color: var(--muted);
+  font-weight: 500; font-size: 13px; padding: 3px 10px; border-radius: 999px; }
+.save button.star.on { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
+.save .tag { background: var(--media); border-radius: 999px; padding: 2px 4px 2px 10px; font-size: 13px; gap: 2px; }
+.save .tag a { color: var(--text); }
+.save .tag button { background: none; border: 0; color: var(--muted); padding: 0 5px; font-weight: 400; }
+.save .add-tag input { width: 96px; font-size: 13px; padding: 3px 9px; border-radius: 999px; }
+header.top .save { margin-top: 8px; }
 .pager { display: flex; gap: 16px; justify-content: center; margin: 24px 0 8px; }
 </style>
 </head>

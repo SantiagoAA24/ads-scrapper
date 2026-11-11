@@ -36,6 +36,10 @@ Permite buscar por texto, anunciante o dominio (sin importar tildes) y filtrar p
 búsqueda de origen, formato, fecha de inicio, mínimo de duplicados y estado. Cada
 tarjeta enlaza al anuncio en la Ad Library y a su página de destino.
 
+**Guardados y etiquetas.** Marca con ☆ los grupos que te interesen y ponles
+etiquetas (por ejemplo "ganador" o "probar"); luego filtra por "Solo guardados" o
+por etiqueta. Quitar un grupo de guardados borra sus etiquetas.
+
 **Búsquedas guardadas.** Crea búsquedas, lánzalas con un clic y prográmalas (cada
 12 horas, cada día, cada 3 días o cada semana). Se ejecutan de una en una, con
 una pausa de 1 a 3 minutos entre ellas, y solo mientras `ads-scrapper web` siga
@@ -85,6 +89,8 @@ Se guardan en `data/` (ignorado por git):
     `collation_count` de ese momento. Sirve para medir crecimiento.
   - `searches`: búsquedas guardadas y su frecuencia.
   - `scrape_runs`: historial de ejecuciones.
+  - `saved_groups` y `group_tags`: guardados y sus etiquetas.
+- `data/media/`: vistas previas descargadas.
 - `data/browser-profile/`: perfil del navegador, para no parecer una sesión nueva
   en cada ejecución.
 
@@ -92,8 +98,14 @@ Se guardan en `data/` (ignorado por git):
 o tiendas distintas. Meta solo agrupa los que además comparten creativo, así que
 el total de copias de un grupo suma los conteos de Meta de cada creativo.
 
-Las vistas previas usan las URLs de Meta, que caducan a los pocos días; al
-repetir la búsqueda se renuevan.
+Al terminar cada búsqueda se descarga la imagen de vista previa de cada anuncio
+a `data/media/`, porque las URLs de Meta caducan a los pocos días. De los videos
+solo se guarda el fotograma de portada. Para descargar las que falten de
+capturas anteriores:
+
+```bash
+ads-scrapper media
+```
 
 ## Cuidado con Meta
 

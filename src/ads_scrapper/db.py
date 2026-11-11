@@ -69,6 +69,8 @@ CREATE TABLE IF NOT EXISTS ads (
     image_urls          TEXT,
     video_urls          TEXT,
     preview_image_url   TEXT,
+    -- File name inside the media folder once the preview is downloaded.
+    preview_file        TEXT,
     content_hash        TEXT,
     first_seen_at       INTEGER NOT NULL,
     last_seen_at        INTEGER NOT NULL,
@@ -86,6 +88,17 @@ CREATE TABLE IF NOT EXISTS observations (
     collation_count INTEGER,
     is_active       INTEGER,
     UNIQUE (ad_archive_id, run_id)
+);
+
+-- Favourites are kept per duplicate group, not per ad.
+CREATE TABLE IF NOT EXISTS saved_groups (
+    group_key TEXT PRIMARY KEY,
+    saved_at  INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS group_tags (
+    group_key TEXT NOT NULL REFERENCES saved_groups(group_key) ON DELETE CASCADE,
+    tag       TEXT NOT NULL,
+    PRIMARY KEY (group_key, tag)
 );
 """
 
@@ -185,6 +198,11 @@ def _migrate(conn: sqlite3.Connection) -> None:
                 (search_id, row["query"], row["country"]),
             )
         conn.execute("PRAGMA user_version = 2")
+        conn.commit()
+    if version < 3:
+        if "preview_file" not in [row["name"] for row in conn.execute("PRAGMA table_info(ads)")]:
+            conn.execute("ALTER TABLE ads ADD COLUMN preview_file TEXT")
+        conn.execute("PRAGMA user_version = 3")
         conn.commit()
 
 
@@ -369,6 +387,8 @@ def search_groups(
     active_only: bool = False,
     max_age_days: int | None = None,
     min_copies: int = 0,
+    saved_only: bool = False,
+    tag: str | None = None,
     sort: str = "trend",
     limit: int = 20,
     offset: int = 0,
@@ -403,6 +423,12 @@ def search_groups(
         conditions.append("a.start_date >= ?")
         params.append(int(time.time()) - max_age_days * 86400)
     cutoff = int(time.time()) - TREND_DAYS * 86400
+    group_conditions, group_params = "", []
+    if saved_only:
+        group_conditions += " AND ranked.group_key IN (SELECT group_key FROM saved_groups)"
+    if tag:
+        group_conditions += " AND ranked.group_key IN (SELECT group_key FROM group_tags WHERE tag = ?)"
+        group_params.append(normalize_tag(tag))
 
     sql = f"""
         WITH f AS (
@@ -445,13 +471,15 @@ def search_groups(
             ) AS position
             FROM f
         )
-        SELECT ranked.*, g.copies, g.creatives, g.growth, s.stored, s.pages, s.first_start, s.last_start
+        SELECT ranked.*, g.copies, g.creatives, g.growth, s.stored, s.pages, s.first_start, s.last_start,
+               EXISTS (SELECT 1 FROM saved_groups sg WHERE sg.group_key = ranked.group_key) AS saved,
+               (SELECT GROUP_CONCAT(tag) FROM group_tags gt WHERE gt.group_key = ranked.group_key) AS tags
         FROM ranked JOIN g USING (group_key) JOIN s USING (group_key)
-        WHERE ranked.position = 1 AND g.copies >= ?
+        WHERE ranked.position = 1 AND g.copies >= ?{group_conditions}
         ORDER BY {SORTS.get(sort, SORTS['trend'])}
         LIMIT ? OFFSET ?
     """
-    return conn.execute(sql, [*params, cutoff, cutoff, min_copies, limit, offset]).fetchall()
+    return conn.execute(sql, [*params, cutoff, cutoff, min_copies, *group_params, limit, offset]).fetchall()
 
 
 def group_ads(conn: sqlite3.Connection, group_key: str) -> list[sqlite3.Row]:
@@ -468,6 +496,70 @@ def list_searches(conn: sqlite3.Connection) -> list[sqlite3.Row]:
         "SELECT query, country, MAX(started_at) AS last_run FROM scrape_runs "
         "WHERE query IS NOT NULL AND ads_seen > 0 GROUP BY query, country ORDER BY last_run DESC"
     ).fetchall()
+
+
+def normalize_tag(tag: str) -> str:
+    """Tags are case-insensitive, single-spaced and free of commas."""
+    return " ".join(tag.replace(",", " ").casefold().split())[:40]
+
+
+def save_group(conn: sqlite3.Connection, group_key: str) -> None:
+    conn.execute(
+        "INSERT OR IGNORE INTO saved_groups (group_key, saved_at) VALUES (?, ?)", (group_key, int(time.time()))
+    )
+    conn.commit()
+
+
+def unsave_group(conn: sqlite3.Connection, group_key: str) -> None:
+    """Remove a favourite along with its tags."""
+    conn.execute("DELETE FROM saved_groups WHERE group_key = ?", (group_key,))
+    conn.commit()
+
+
+def add_tag(conn: sqlite3.Connection, group_key: str, tag: str) -> None:
+    """Tag a group; tagging also saves it."""
+    tag = normalize_tag(tag)
+    if not tag:
+        return
+    save_group(conn, group_key)
+    conn.execute("INSERT OR IGNORE INTO group_tags (group_key, tag) VALUES (?, ?)", (group_key, tag))
+    conn.commit()
+
+
+def remove_tag(conn: sqlite3.Connection, group_key: str, tag: str) -> None:
+    conn.execute("DELETE FROM group_tags WHERE group_key = ? AND tag = ?", (group_key, normalize_tag(tag)))
+    conn.commit()
+
+
+def group_state(conn: sqlite3.Connection, group_key: str) -> tuple[bool, list[str]]:
+    """Whether a group is saved, and its tags."""
+    saved = conn.execute("SELECT 1 FROM saved_groups WHERE group_key = ?", (group_key,)).fetchone()
+    tags = conn.execute("SELECT tag FROM group_tags WHERE group_key = ? ORDER BY tag", (group_key,))
+    return bool(saved), [row[0] for row in tags]
+
+
+def list_tags(conn: sqlite3.Connection) -> list[str]:
+    return [row[0] for row in conn.execute("SELECT DISTINCT tag FROM group_tags ORDER BY tag")]
+
+
+def media_dir(conn: sqlite3.Connection) -> Path:
+    """Folder for downloaded previews, next to the database file."""
+    database_file = conn.execute("PRAGMA database_list").fetchone()["file"]
+    return Path(database_file).parent / "media"
+
+
+def ads_missing_previews(conn: sqlite3.Connection, run_id: int | None = None) -> list[sqlite3.Row]:
+    """Ads with a preview URL not downloaded yet, optionally only those of a run."""
+    sql = "SELECT ad_archive_id, preview_image_url FROM ads WHERE preview_file IS NULL AND preview_image_url IS NOT NULL"
+    params: list[Any] = []
+    if run_id is not None:
+        sql += " AND ad_archive_id IN (SELECT ad_archive_id FROM observations WHERE run_id = ?)"
+        params.append(run_id)
+    return conn.execute(sql, params).fetchall()
+
+
+def set_preview_file(conn: sqlite3.Connection, ad_archive_id: str, file_name: str) -> None:
+    conn.execute("UPDATE ads SET preview_file = ? WHERE ad_archive_id = ?", (file_name, ad_archive_id))
 
 
 def list_formats(conn: sqlite3.Connection) -> list[str]:

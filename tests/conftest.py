@@ -80,3 +80,15 @@ def fake_library(payload):
     threading.Thread(target=server.serve_forever, daemon=True).start()
     yield f"http://127.0.0.1:{server.server_port}/ads/library/", requests
     server.shutdown()
+
+
+@pytest.fixture(autouse=True)
+def no_network_previews(monkeypatch):
+    """Tests never contact Meta's CDN; preview downloads fail unless a test
+    provides its own fetcher."""
+    from ads_scrapper import media
+
+    def offline(url):
+        raise OSError("sin red en los tests")
+
+    monkeypatch.setattr(media, "_fetch", offline)

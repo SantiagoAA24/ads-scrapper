@@ -24,6 +24,15 @@
     </select>
     <input type="number" name="min_copies" min="1" value="{{ filters.min_copies }}" placeholder="Mín. ×" aria-label="Mínimo de duplicados">
     <label class="check"><input type="checkbox" name="active" value="1" {{ 'checked' if filters.active == '1' }}> Solo activos</label>
+    <label class="check"><input type="checkbox" name="saved" value="1" {{ 'checked' if filters.saved == '1' }}> Solo guardados</label>
+    {% if tags %}
+    <select name="tag" aria-label="Etiqueta">
+      <option value="">Todas las etiquetas</option>
+      {% for value in tags %}
+      <option value="{{ value }}" {{ 'selected' if value == filters.tag }}>{{ value }}</option>
+      {% endfor %}
+    </select>
+    {% endif %}
     <select name="sort" aria-label="Orden">
       {% for value, label in sort_choices %}
       <option value="{{ value }}" {{ 'selected' if value == filters.sort }}>{{ label }}</option>
@@ -32,15 +41,17 @@
     <button type="submit">Buscar</button>
   </form>
 </header>
+<datalist id="known-tags">{% for value in tags %}<option value="{{ value }}">{% endfor %}</datalist>
 <main>
   {% if groups %}
     <p class="summary">
-      {{ total_ads }} anuncios guardados. Cada tarjeta agrupa los que comparten el mismo texto;
+      {{ total_ads }} anuncios capturados. Cada tarjeta agrupa los que comparten el mismo texto;
       × es el total de copias activas según Meta y el verde, las ganadas en los últimos {{ trend_days }} días.
     </p>
     <div class="grid">
       {% for ad in groups %}
         {% set copies = ad.copies %}
+        {% set card_group_key = ad.group_key %}
         {% set growth = ad.growth %}
         {% set full_copy = false %}
         {% set group_link = "/group/" ~ (ad.group_key | urlencode) if ad.stored > 1 else none %}
@@ -59,7 +70,7 @@
     </nav>
   {% elif total_ads == 0 %}
     <div class="empty">
-      <p>Todavía no hay anuncios guardados.</p>
+      <p>Todavía no hay anuncios capturados.</p>
       <p><a href="/searches">Crea tu primera búsqueda</a> para empezar a capturar.</p>
     </div>
   {% else %}

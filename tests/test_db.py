@@ -232,3 +232,14 @@ def test_terminal_searches_from_older_databases_become_saved_searches(tmp_path):
     conn = db.connect(tmp_path / "ads.db")
     (search,) = db.saved_searches(conn)
     assert (search["query"], search["country"], search["last_run_at"], search["last_status"]) == ("faja reductora", "CO", 100, "completed")
+
+
+def test_preview_column_is_added_to_older_databases(tmp_path, payload_text):
+    conn = _loaded(tmp_path, payload_text)
+    conn.execute("ALTER TABLE ads DROP COLUMN preview_file")
+    conn.execute("PRAGMA user_version = 2")
+    conn.commit()
+    conn.close()
+    conn = db.connect(tmp_path / "ads.db")
+    assert len(db.ads_missing_previews(conn)) == 29
+    assert len(db.search_groups(conn, limit=50)) == 25
